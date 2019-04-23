@@ -44,7 +44,7 @@ async function regisetrForPushnotificationsAsync() {
 
   let token = await Notifications.getExpoPushTokenAsync();
 
-  axios.post('http://13.250.101.147/deviceToken' , { token })
+  axios.post('some URL' , { token })
 }
  catch(e){
    console.log(e)
