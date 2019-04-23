@@ -1,0 +1,365 @@
+import React from "react";
+import {
+  ScrollView,
+  AsyncStorage,
+  ActivityIndicator,
+  RefreshControl,
+  Animated,
+  Platform,
+  Text,
+  View,
+  BackHandler,
+  Image
+} from "react-native";
+
+import styles from "../../styles";
+import StoryCard from "../StoryCard";
+import HomePageAds from './HomePageAds'
+import { loadStories, loadMoreStories } from "../../functions/loadStories";
+import { GoTopButton } from "./GoTopButton";
+import sendAnalytics from "../../functions/sendAnalytics";
+import { Actions } from 'react-native-router-flux'
+import axios from 'axios'
+import { Permissions, Notifications } from 'expo'
+
+let notificationSid = 0
+
+async function regisetrForPushnotificationsAsync() {
+
+  try{
+  const { status: existinStatus } = await Permissions.getAsync(
+    Permissions.NOTIFICATIONS
+  )
+
+  let finalStatus = existinStatus
+
+  if(existinStatus !== 'granted'){
+    const { status } = await Permissions.askAsync(Permissions.NOTIFICATIONS)
+    finalStatus = status
+  }
+
+  if(finalStatus !== 'granted'){
+    return;
+  }
+
+  let token = await Notifications.getExpoPushTokenAsync();
+
+  axios.post('http://13.250.101.147/deviceToken' , { token })
+}
+ catch(e){
+   console.log(e)
+ }
+ 
+}
+
+export default class HomeScreen extends React.Component {
+  constructor() {
+    super();
+    this.state = {
+      storiesList: [],
+      isLoading: true,
+      refreshing: false,
+      scrollY: new Animated.Value(0),
+      loadMore: false,
+      page: 1,
+      isLoadingMore: false, 
+      showGoUpButton: false, 
+      language: 'en', 
+      refreshAds: false
+     
+    };
+    this.getHomePageData = this.getHomePageData.bind(this);
+  }
+
+  _onRefresh = async () => {
+    const { refreshAds } = this.state
+    this.setState({ refreshing: true });
+    await this.getHomePageData();
+    this.setState({ refreshing: false, refreshAds: !refreshAds}); 
+    
+  };
+
+  getLanguage = async () => await AsyncStorage.getItem("language");
+
+  getHomePageData = async () => {
+    const { category, type } = this.props;
+    try {
+      const language = await this.getLanguage() || 'en'
+      const stories = await loadStories(language, category, type);
+
+      this.setState({ storiesList: stories, isLoading: false, language });
+    } catch (e) {
+      console.log(e);
+    }
+  };
+
+  _handleNotification = (notification) => {
+
+    const { origin , data} = notification
+
+    if(data && origin === 'selected' && 'sid' in data) {
+
+      if(data.sid !== notificationSid){
+       notificationSid = data.sid
+        Actions.content({
+          sid: data.sid,
+          title : data.body
+        });
+      }
+      
+      sendAnalytics(`/Notification/Opened/${data.sid}`)
+    }
+    else if(origin === 'selected'){
+      sendAnalytics(`/Notification/Opened/Home`)
+    }
+  }
+
+  componentDidMount = async () => {
+    const language = await AsyncStorage.getItem('language') || 'en'
+
+    regisetrForPushnotificationsAsync()
+    this._notificationSubscription = Notifications.addListener(this._handleNotification);
+    BackHandler.addEventListener('hardwareBackPress', () => {
+      if(Actions.currentScene === 'home'){
+      BackHandler.exitApp()
+      
+      setTimeout(() => {
+        if(language === 'zh'){
+          Actions.reset('home', {
+            renderTitle :() => (
+              <Image
+                style={{ maxWidth: 90, height: 22, marginLeft: 15 }}
+                source={require('../../assets/mk-logo-zh.png')}
+              />
+            )
+           });
+        }
+        else {
+          Actions.reset('home', {
+            renderTitle :() => (
+              <Image
+                style={{ width: 120, height: 20, marginLeft: 15 }}
+                source={require('../../assets/logo.png')}
+              />
+            )
+           });
+        }
+        
+       }, 500)
+      return true
+      }
+      return false
+    })
+    
+    const { type, category } = this.props;
+    this.getHomePageData();
+    
+    sendAnalytics(`/Home/${type}/${category}`);
+  };
+
+  componentWillUnmount = () => {
+    BackHandler.removeEventListener('hardwareBackPress', () => {
+      if(Actions.currentScene === 'home'){
+      BackHandler.exitApp()
+      setTimeout(() => {
+        if(language === 'zh'){
+          Actions.reset('home', {
+            renderTitle :() => (
+              <Image
+                style={{ maxWidth: 90, height: 22, marginLeft: 15 }}
+                source={require('../../assets/mk-logo-zh.png')}
+              />
+            )
+           });
+        }
+        else {
+          Actions.reset('home', {
+            renderTitle :() => (
+              <Image
+                style={{ width: 120, height: 20, marginLeft: 15 }}
+                source={require('../../assets/logo.png')}
+              />
+            )
+           });
+        }
+        
+       }, 500)
+      return true
+      }
+      return false
+     })
+    }
+
+  isCloseToBottom = ({ layoutMeasurement, contentOffset, contentSize }) => {
+    const paddingToBottom = 20;
+    return (
+      layoutMeasurement.height + contentOffset.y >=
+      contentSize.height - paddingToBottom
+    );
+  };
+
+  loadMoreData = async () => {
+    const { loadMore, page, storiesList } = this.state;
+    const { type, category, language } = this.props;
+
+    if (loadMore) {
+      return;
+    } else {
+      this.setState({ loadMore: true, isLoadingMore: true });
+
+      const stories = await loadMoreStories(page, category, type, language);
+      const newList = [...new Set(storiesList.concat(stories))];
+      const nextPage = page + 1;
+      this.setState({ storiesList: newList, loadMore: false, page: nextPage, isLoadingMore: false });
+    }
+  };
+
+  goToTop = () => {
+    this.refs._scrollUp.scrollTo({ x: 0, y: 0, animated: true })
+    this.setState({ showGoUpButton: false })
+  }
+
+  render() {
+    const { storiesList, isLoading, isLoadingMore , showGoUpButton, language, refreshAds } = this.state;
+    const { categoryTitle } = this.props
+
+   
+    
+    // ios specific code
+    if (Platform.OS === "ios") {
+      return !isLoading ? (
+        <View style={{ flex: 1 }}>
+          <ScrollView
+            ref="_scrollUp"
+            scrollEventThrottle={16}
+            onScroll={Animated.event([
+              { nativeEvent: { contentOffset: { y: this.state.scrollY } } }
+            ])}
+            onMomentumScrollEnd={({ nativeEvent }) => {
+              if (this.isCloseToBottom(nativeEvent)) {
+                this.loadMoreData();
+              }
+            }}
+            refreshControl={
+              <RefreshControl
+                refreshing={this.state.refreshing}
+                onRefresh={this._onRefresh}
+              />
+            }
+            style={styles.container}
+          >
+            {storiesList.map((story, index) => {
+              return <StoryCard 
+                      key={`${story.sid}-${index}`} 
+                      story={story} 
+                      redirectUrl={story.redirect} 
+                      index={index}
+                      />;
+            })}
+          </ScrollView>
+          <GoTopButton goUp={this.goToTop} />
+        </View>
+      ) : (
+        <ActivityIndicator style={styles.loadingIndicator} size="large" />
+      );
+    }
+
+    // android specific code
+    return !isLoading ? (
+      <View style={{ flex: 1 }}>
+        <ScrollView
+          ref="_scrollUp"
+          scrollEventThrottle={16}
+          onScroll={Animated.event(
+            [{ nativeEvent: { contentOffset: { y: this.state.scrollY } } }],
+            {
+              listener: event => {
+
+                if (this.isCloseToBottom(event.nativeEvent)) {
+                  this.loadMoreData();
+                }
+
+                
+                else if(event.nativeEvent.contentOffset.y > 1000 && !showGoUpButton ){
+                  this.setState({
+                    showGoUpButton: true
+                  })
+                }
+
+                else if(event.nativeEvent.contentOffset.y === 0 && showGoUpButton){
+                  this.setState({
+                    showGoUpButton: false
+                  })
+                }
+              }
+            }
+          )}
+          refreshControl={
+            <RefreshControl
+              refreshing={this.state.refreshing}
+              onRefresh={this._onRefresh}
+            />
+          }
+          style={styles.container}
+        >
+          {storiesList.map((story , index)=> {
+            
+        if((categoryTitle === 'NEWS' || categoryTitle === 'BERITA' || categoryTitle === '新闻') 
+            && (index === 3 || index === 6)) {
+              return (
+                <View key={story.sid}>
+                <HomePageAds 
+                language={language}
+                position={index}
+                refreshAds={refreshAds}
+                />
+                <StoryCard 
+                key={story.sid} 
+                story={story} 
+                redirectUrl={story.redirect} 
+                categoryTitle={categoryTitle}
+                commentCount={story.comment_count}
+                index={index}
+                storiesList={storiesList}
+                /> 
+                </View>
+                )
+            }
+         
+            return (
+            <StoryCard 
+            key={story.sid} 
+            story={story} 
+            redirectUrl={story.redirect} 
+            categoryTitle={categoryTitle}
+            commentCount={story.comment_count}
+            index={index}
+            storiesList={storiesList}
+            /> )
+
+        
+
+          })}
+        </ScrollView>
+        {
+          isLoadingMore && (
+            <View style={{ textAlign: "center", flex: 1, alignItems: "center", flexDirection: "column"}}>
+              <Text style={{ fontStyle: "italic" }}>Loading more stories ...</Text>
+              <ActivityIndicator size="small"/>
+            </View>
+          )
+        }
+
+        {
+
+         showGoUpButton && (
+        <GoTopButton goUp={this.goToTop} />
+         )
+        
+        }
+      </View>
+    ) : (
+      <ActivityIndicator style={styles.loadingIndicator} size="large" />
+    );
+  }
+}
